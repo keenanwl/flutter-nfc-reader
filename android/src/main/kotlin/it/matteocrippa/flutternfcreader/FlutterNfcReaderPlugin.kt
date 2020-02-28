@@ -2,52 +2,52 @@ package it.matteocrippa.flutternfcreader
 
 import android.Manifest
 import android.content.Context
-import android.content.Intent
-import android.nfc.*
+import android.nfc.NfcAdapter
+import android.nfc.NfcManager
+import android.nfc.Tag
 import android.nfc.tech.Ndef
-import android.nfc.tech.NdefFormatable
+import android.nfc.tech.MifareClassic
 import android.os.Build
-import android.os.Handler
+import android.os.Handler;
+import android.os.Looper;
 import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.EventChannel.StreamHandler
+import io.flutter.plugin.common.EventChannel.EventSink
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler
 import io.flutter.plugin.common.MethodChannel.Result
 import io.flutter.plugin.common.PluginRegistry.Registrar
 import java.nio.charset.Charset
-import android.os.Looper
-import java.io.IOException
+
 
 const val PERMISSION_NFC = 1007
 
-class FlutterNfcReaderPlugin(registrar: Registrar) : MethodCallHandler, EventChannel.StreamHandler, NfcAdapter.ReaderCallback {
+class FlutterNfcReaderPlugin(val registrar: Registrar) : MethodCallHandler, EventChannel.StreamHandler, NfcAdapter.ReaderCallback {
 
     private val activity = registrar.activity()
 
+    private var isReading = false
     private var nfcAdapter: NfcAdapter? = null
     private var nfcManager: NfcManager? = null
 
+    private var eventSink: EventChannel.EventSink? = null
+    private var handler: Handler? = null
+
+    private var keyA: ByteArray = byteArrayOf()
+    private var keyB: ByteArray = byteArrayOf()
+    private var sectorRead: Int = 0
 
     private var kId = "nfcId"
     private var kContent = "nfcContent"
     private var kError = "nfcError"
     private var kStatus = "nfcStatus"
-    private var kWrite = ""
-    private var kPath = ""
-    private var readResult: Result? = null
-    private var writeResult: Result? = null
-    private var tag: Tag? = null
-    private var eventChannel: EventChannel.EventSink? = null
 
-    private var nfcFlags = NfcAdapter.FLAG_READER_NFC_A or
-            NfcAdapter.FLAG_READER_NFC_B or
-            NfcAdapter.FLAG_READER_NFC_BARCODE or
-            NfcAdapter.FLAG_READER_NFC_F or
-            NfcAdapter.FLAG_READER_NFC_V
+    private var READER_FLAGS = NfcAdapter.FLAG_READER_NFC_A
 
     companion object {
         @JvmStatic
-        fun registerWith(registrar: Registrar) {
+        fun registerWith(registrar: Registrar): Unit {
             val messenger = registrar.messenger()
             val channel = MethodChannel(messenger, "flutter_nfc_reader")
             val eventChannel = EventChannel(messenger, "it.matteocrippa.flutternfcreader.flutter_nfc_reader")
@@ -58,112 +58,75 @@ class FlutterNfcReaderPlugin(registrar: Registrar) : MethodCallHandler, EventCha
     }
 
     init {
-        if(activity != null) {
-            nfcManager = activity.getSystemService(Context.NFC_SERVICE) as? NfcManager
-            nfcAdapter = nfcManager?.defaultAdapter
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                activity.requestPermissions(
-                        arrayOf(Manifest.permission.NFC),
-                        PERMISSION_NFC
-                )
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-                nfcAdapter?.enableReaderMode(activity, this, nfcFlags, null)
-            }
-        }
+        nfcManager = activity.getSystemService(Context.NFC_SERVICE) as? NfcManager
+        nfcAdapter = nfcManager?.defaultAdapter
     }
 
-    private fun writeMessageToTag(nfcMessage: NdefMessage, tag: Tag?): Boolean {
-
-        try {
-            val nDefTag = Ndef.get(tag)
-
-            nDefTag?.let {
-                it.connect()
-                if (it.maxSize < nfcMessage.toByteArray().size) {
-                    //Message to large to write to NFC tag
-                    return false
-                }
-                return if (it.isWritable) {
-                    it.writeNdefMessage(nfcMessage)
-                    it.close()
-                    //Message is written to tag
-                    true
-                } else {
-                    //NFC tag is read-only
-                    false
-                }
-            }
-
-            val nDefFormatableTag = NdefFormatable.get(tag)
-
-            nDefFormatableTag?.let {
-                return try {
-                    it.connect()
-                    it.format(nfcMessage)
-                    it.close()
-                    //The data is written to the tag
-                    true
-                } catch (e: IOException) {
-                    //Failed to format tag
-                    false
-                }
-            }
-            //NDEF is not supported
-            return false
-
-        } catch (e: Exception) {
-            //Write operation has failed
-        }
-        return false
-    }
-
-    fun createNFCMessage(payload: String?, intent: Intent?): Boolean {
-
-        val pathPrefix = "it.matteocrippa.flutternfcreader"
-        val nfcRecord = NdefRecord(NdefRecord.TNF_EXTERNAL_TYPE, pathPrefix.toByteArray(), ByteArray(0), (payload as String).toByteArray())
-        val nfcMessage = NdefMessage(arrayOf(nfcRecord))
-        intent?.let {
-            val tag = it.getParcelableExtra<Tag>(NfcAdapter.EXTRA_TAG)
-            return writeMessageToTag(nfcMessage, tag)
-        }
-        return false
-    }
-
-
-    override fun onMethodCall(call: MethodCall, result: Result) {
-
-        if (nfcAdapter?.isEnabled != true && call.method != "NfcAvailable") {
-            result.error("404", "NFC Hardware not found", null)
-            return
-        }
+    override fun onMethodCall(call: MethodCall, result: MethodChannel.Result): Unit {
 
         when (call.method) {
-            "NfcStop" -> {
-                readResult = null
-                writeResult = null
-            }
-
             "NfcRead" -> {
-                readResult = result
-            }
 
-            "NfcWrite" -> {
-                writeResult = result
-                kWrite = call.argument("label")!!
-                kPath = call.argument("path")!!
-                if (this.tag != null) {
-                    writeTag()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    activity.requestPermissions(
+                        arrayOf(Manifest.permission.NFC),
+                        PERMISSION_NFC
+                    )
                 }
+
+                val HEX_CHARS = "0123456789abcdef"
+                val keyAHex: String? = call.argument("keyA")
+                val keyBHex: String? = call.argument("keyB")
+                val sectorReadIn: Int? = call.argument("sectorRead")
+
+                if (keyAHex != null) {
+                    val res = ByteArray(keyAHex.length / 2)
+
+                    for (i in 0 until keyAHex.length step 2) {
+                        val firstIndex = HEX_CHARS.indexOf(keyAHex[i])
+                        val secondIndex = HEX_CHARS.indexOf(keyAHex[i + 1])
+
+                        val octet = firstIndex.shl(4).or(secondIndex)
+                        res[i.shr(1)] = octet.toByte()
+                    }
+
+                    this.keyA = res
+                }
+
+                if (keyBHex != null) {
+                    val res = ByteArray(keyBHex.length / 2)
+
+                    for (i in 0 until keyBHex.length step 2) {
+                        val firstIndex = HEX_CHARS.indexOf(keyBHex[i])
+                        val secondIndex = HEX_CHARS.indexOf(keyBHex[i + 1])
+
+                        val octet = firstIndex.shl(4).or(secondIndex)
+                        res[i.shr(1)] = octet.toByte()
+                    }
+
+                    this.keyB = res
+                }
+
+                if (sectorReadIn != null) {
+                    this.sectorRead = sectorReadIn
+                }
+
+                if (!startNFC()) {
+                    result.error("404", "ISSUE STARTING", null)
+                    return
+                }
+
+                if (!isReading) {
+                    result.error("404", "NFC Hardware not found", null)
+                    return
+                }
+
+                result.success(null)
             }
-            "NfcAvailable" -> {
-                when {
-                    nfcAdapter == null -> result.success("not_supported")
-                    nfcAdapter!!.isEnabled -> result.success("available")
-                    else -> result.success("disabled")
-                }
+            "NfcStop" -> {
+                stopNFC()
+                val data = mapOf(kId to "", kContent to "", kError to "", kStatus to "stopped")
+                result.success(data)
             }
             else -> {
                 result.notImplemented()
@@ -172,80 +135,132 @@ class FlutterNfcReaderPlugin(registrar: Registrar) : MethodCallHandler, EventCha
     }
 
     // EventChannel.StreamHandler methods
-    override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
-        eventChannel = events
+    override fun onListen(arguments: Any?, eventSink: EventChannel.EventSink?) {
+        this.eventSink = eventSink
+        this.handler = Handler(Looper.getMainLooper())
     }
 
     override fun onCancel(arguments: Any?) {
-        eventChannel =  null
+      eventSink = null
+      stopNFC()
     }
 
+    private fun startNFC(): Boolean {
+
+        if (nfcAdapter == null) {
+            val data = mapOf(kId to "", kContent to "", kError to "nfcAdapter null", kStatus to "")
+            eventSink?.success(data)
+        } else {
+            val data = mapOf(kId to "", kContent to "", kError to "nfcAdapter NOT null", kStatus to "")
+            eventSink?.success(data)
+        }
+
+
+        isReading = if (nfcAdapter?.isEnabled == true) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+                nfcAdapter?.enableReaderMode(registrar.activity(), this, READER_FLAGS, null )
+
+                val data = mapOf(kId to "", kContent to "", kError to "", kStatus to "readFail")
+                eventSink?.success(data)
+            }
+
+            true
+        } else {
+            false
+        }
+        return isReading
+    }
 
     private fun stopNFC() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            nfcAdapter?.disableReaderMode(activity)
+            nfcAdapter?.disableReaderMode(registrar.activity())
         }
-    }
-
-
-    private fun writeTag() {
-        if (writeResult != null) {
-            val nfcRecord = NdefRecord(NdefRecord.TNF_EXTERNAL_TYPE, kPath.toByteArray(), ByteArray(0), kWrite.toByteArray())
-            val nfcMessage = NdefMessage(arrayOf(nfcRecord))
-            writeMessageToTag(nfcMessage, tag)
-            val data = mapOf(kId to "", kContent to kWrite, kError to "", kStatus to "write")
-            val mainHandler = Handler(Looper.getMainLooper())
-            mainHandler.post {
-                writeResult?.success(data)
-                writeResult = null
-            }
-        }
-    }
-
-
-    private fun readTag() {
-        if (readResult != null) {
-            // convert tag to NDEF tag
-            val ndef = Ndef.get(tag)
-            ndef?.connect()
-            val ndefMessage = ndef?.ndefMessage ?: ndef?.cachedNdefMessage
-            val message = ndefMessage?.toByteArray()
-                    ?.toString(Charset.forName("UTF-8")) ?: ""
-            //val id = tag?.id?.toString(Charset.forName("ISO-8859-1")) ?: ""
-            val id = bytesToHexString(tag?.id) ?: ""
-            ndef?.close()
-            val data = mapOf(kId to id, kContent to message, kError to "", kStatus to "reading")
-            val mainHandler = Handler(Looper.getMainLooper())
-            mainHandler.post {
-                readResult?.success(data)
-                readResult = null
-            }
-        } else {
-            // convert tag to NDEF tag
-            val ndef = Ndef.get(tag)
-            ndef?.connect()
-            val ndefMessage = ndef?.ndefMessage ?: ndef?.cachedNdefMessage
-            val message = ndefMessage?.toByteArray()
-                    ?.toString(Charset.forName("UTF-8")) ?: ""
-            //val id = tag?.id?.toString(Charset.forName("ISO-8859-1")) ?: ""
-            val id = bytesToHexString(tag?.id) ?: ""
-            ndef?.close()
-            val data = mapOf(kId to id, kContent to message, kError to "", kStatus to "reading")
-            val mainHandler = Handler(Looper.getMainLooper())
-            mainHandler.post {
-                eventChannel?.success(data)
-            }
-        }
+        isReading = false
+        eventSink = null
     }
 
     // handle discovered NDEF Tags
     override fun onTagDiscovered(tag: Tag?) {
-        this.tag = tag
-        writeTag()
-        readTag()
-        Handler(Looper.getMainLooper()).postDelayed({
-            this.tag = null
-        }, 2000)
+
+        val mfc = MifareClassic.get(tag)
+        var sector = -1
+        var msg = ""
+
+        if (mfc != null) {
+
+            mfc.connect()
+
+            for (i in 0..mfc.blockCount) {
+
+                var authenticated = false
+
+                if(mfc.blockToSector(i) != sector) {
+
+                    sector = mfc.blockToSector(i)
+
+                    if (mfc.authenticateSectorWithKeyA(sector, MifareClassic.KEY_DEFAULT)) {
+
+                        authenticated = true
+
+                    } else if (this.keyA.isNotEmpty() && mfc.authenticateSectorWithKeyA(sector, this.keyA)) {
+
+                        authenticated = true
+
+                    } else if (this.keyB.isNotEmpty() && mfc.authenticateSectorWithKeyB(sector, this.keyB)) {
+
+                        authenticated = true
+
+                    }
+
+                    if (authenticated && sector == this.sectorRead) {
+
+                        val msgI = mfc.readBlock(i)
+
+                        if (msgI != null && msgI.isNotEmpty()) {
+
+                            msg += ""
+
+                            var st = ""
+                            for (b in msgI) {
+
+                                st = st + String.format("%02X", b)
+
+                            }
+
+                            msg += st
+
+                            val id = bytesToHexString(tag?.id) ?: ""
+
+                            val data = mapOf(kId to id + "", kContent to msg, kError to "", kStatus to "read")
+
+                            handler?.post { eventSink?.success(data) }
+
+                            break
+
+                        }
+
+
+
+
+                    } else {
+
+                        //msg += "\nSECISSUE:" + sector.toString()
+
+                    }
+
+                }
+
+            }
+
+            mfc.close()
+
+        } else {
+
+            val data = mapOf(kId to "", kContent to "", kError to "", kStatus to "read")
+            eventSink?.success(data)
+
+        }
+
     }
 
     private fun bytesToHexString(src: ByteArray?): String? {
