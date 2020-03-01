@@ -66,25 +66,27 @@ class FlutterNfcReader {
     return result;
   }
 
-  static Future<NfcData> read({String instruction}) async {
-    final Map data = await _callRead(instruction: instruction);
+  static Future<NfcData> read(String keyA, String keyB, int sectorRead) async {
+    final Map data = await _callRead(keyA, keyB, sectorRead);
     final NfcData result = NfcData.fromMap(data);
     return result;
   }
 
-  static Stream<NfcData> onTagDiscovered({String instruction}) {
+  static Stream<NfcData> onTagDiscovered(String keyA, String keyB, int sectorRead) {
     if (Platform.isIOS) {
-      _callRead(instruction: instruction);
+      _callRead(keyA, keyB, sectorRead);
     }
     return stream.receiveBroadcastStream().map((rawNfcData) {
       return NfcData.fromMap(rawNfcData);
     });
   }
 
-  static Future<Map> _callRead({instruction: String}) async {
-      return await _channel.invokeMethod('NfcRead', <String, dynamic> {
-        "instruction": instruction
-      }); 
+  static Future<Map> _callRead(String keyA, String keyB, int sectorRead) async {
+      return await _channel.invokeMethod('NfcRead', {
+        'keyA': keyA,
+        'keyB': keyB,
+        'sectorRead': sectorRead
+      });
   } 
 
   static Future<NfcData> write(String path, String label) async {
