@@ -9,6 +9,7 @@ if (localPropertiesFile.exists()) {
     }
 }
 
+/* flutter.sdk=:pathToSdk should be set in ./local.properties */
 def flutterRoot = localProperties.getProperty('flutter.sdk')
 if (flutterRoot == null) {
     throw new GradleException("Flutter SDK not found. Define location with flutter.sdk in the local.properties file.")
@@ -38,12 +39,11 @@ rootProject.allprojects {
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 apply plugin: 'kotlin-android-extensions'
-apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
-
-
-flutter {
-    source '../..'
+/* Used for IDE flutter dependency resolution when working on .kt plugin */
+if (project.getParent() == null) {
+    apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
 }
+
 
 android {
     compileSdkVersion 29
@@ -63,3 +63,11 @@ android {
 dependencies {
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"
 }
+
+/* Used for IDE flutter dependency resolution when working on .kt plugin */
+if (project.getParent() == null) {
+    flutter {
+        source '../..'
+    }
+}
+
