@@ -90,7 +90,7 @@ class FlutterNfcReaderPlugin(registrar: Registrar) : MethodCallHandler, EventCha
             nDefTag?.let {
                 it.connect()
                 if (it.maxSize < nfcMessage.toByteArray().size) {
-                    //Message to large to write to NFC tag
+                    //Message too large to write to NFC tag
                     return false
                 }
                 return if (it.isWritable) {
@@ -155,7 +155,7 @@ class FlutterNfcReaderPlugin(registrar: Registrar) : MethodCallHandler, EventCha
             "NfcRead" -> {
                 readResult = result
                 this.keyA = _MiFareKey(call.argument("keyA"))
-                this.keyA = _MiFareKey(call.argument("keyB"))
+                this.keyB = _MiFareKey(call.argument("keyB"))
                 this.sectorRead = call.argument("sectorRead")
             }
 
@@ -307,10 +307,11 @@ class FlutterNfcReaderPlugin(registrar: Registrar) : MethodCallHandler, EventCha
                         }
                         readSuccess = true
 
-                    } else {
+                    } else if (sector == sectorRead) {
                         // Could not read expected sector
                         mfc.close()
-                        return readSuccess to msg
+
+                        return Pair(readSuccess, msg)
                     }
                 }
             }
@@ -318,7 +319,7 @@ class FlutterNfcReaderPlugin(registrar: Registrar) : MethodCallHandler, EventCha
 
         }
 
-        return readSuccess to msg
+        return Pair(readSuccess, msg)
 
     }
 

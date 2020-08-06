@@ -73,9 +73,10 @@ class FlutterNfcReader {
   }
 
   static Stream<NfcData> onTagDiscovered(String keyA, String keyB, int sectorRead) {
-    if (Platform.isIOS) {
+    if (Platform.isAndroid) {
       _callRead(keyA, keyB, sectorRead);
     }
+
     return stream.receiveBroadcastStream().map((rawNfcData) {
       return NfcData.fromMap(rawNfcData);
     });
